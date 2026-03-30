@@ -2,7 +2,7 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
-/// Looping, muted video that fills its container (uses `AVPlayerLooper` for stable loops).
+/// Looping, muted video that fills its container (`AVPlayerLooper` + tuned for local short clips).
 struct LoopingVideoView: UIViewRepresentable {
     let url: URL
 
@@ -26,6 +26,7 @@ struct LoopingVideoView: UIViewRepresentable {
         private var looper: AVPlayerLooper?
         private var loadedPath: String?
         private var statusObservation: NSKeyValueObservation?
+        private var loadGeneration: UInt64 = 0
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -35,9 +36,8 @@ struct LoopingVideoView: UIViewRepresentable {
 
         required init?(coder: NSCoder) { fatalError() }
 
-        /// Compare filesystem paths so SwiftUI updates do not reload the same file every frame.
         func loadVideoIfNeeded(url: URL) {
-            let path = url.path
+            let path = url.standardizedFileURL.path
             guard !path.isEmpty else { return }
 
             if path == loadedPath {
@@ -50,31 +50,55 @@ struct LoopingVideoView: UIViewRepresentable {
             }
 
             cleanup()
+            loadGeneration += 1
+            let generation = loadGeneration
+            let fileURL = url.standardizedFileURL
 
-            let template = AVPlayerItem(url: url)
-            let player = AVQueuePlayer()
-            player.isMuted = true
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let template = AVPlayerItem(url: fileURL)
+                template.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                template.preferredForwardBufferDuration = 1.0
+                if #available(iOS 15.0, *) {
+                    // Bubble is small; decode at modest resolution for smoother playback.
+                    template.preferredMaximumResolution = CGSize(width: 720, height: 720)
+                }
 
-            let playerLooper = AVPlayerLooper(player: player, templateItem: template)
+                let player = AVQueuePlayer()
+                player.isMuted = true
+                player.automaticallyWaitsToMinimizeStalling = false
 
-            let layer = AVPlayerLayer(player: player)
-            layer.videoGravity = .resizeAspectFill
-            layer.frame = bounds
-            self.layer.addSublayer(layer)
+                let playerLooper = AVPlayerLooper(player: player, templateItem: template)
 
-            playerLayer = layer
-            queuePlayer = player
-            looper = playerLooper
-            loadedPath = path
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else {
+                        player.pause()
+                        return
+                    }
+                    guard generation == self.loadGeneration else {
+                        player.pause()
+                        return
+                    }
 
-            statusObservation = template.observe(\.status, options: [.new]) { [weak self, weak player] item, _ in
-                guard item.status == .readyToPlay else { return }
-                player?.play()
-                self?.clearStatusObservation()
-            }
+                    let layer = AVPlayerLayer(player: player)
+                    layer.videoGravity = .resizeAspectFill
+                    layer.frame = self.bounds
+                    self.layer.addSublayer(layer)
 
-            if template.status == .readyToPlay {
-                player.play()
+                    self.playerLayer = layer
+                    self.queuePlayer = player
+                    self.looper = playerLooper
+                    self.loadedPath = path
+
+                    self.statusObservation = template.observe(\.status, options: [.new]) { [weak self, weak player] item, _ in
+                        guard item.status == .readyToPlay else { return }
+                        player?.play()
+                        self?.clearStatusObservation()
+                    }
+
+                    if template.status == .readyToPlay {
+                        player.play()
+                    }
+                }
             }
         }
 

@@ -242,11 +242,33 @@ struct ChatView: View {
     private func beginSendAnimation(url: URL) {
         let newIndex = sentBoomerangs.count
         flyingBubbleIndex = newIndex
-        sentBoomerangs.append(url)
+        let playbackURL = persistSentVideo(from: url) ?? url
+        sentBoomerangs.append(playbackURL)
         // The onChange handler scrolls to this bubble.
         // After scroll + fly-in animation complete, reveal the bubble.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             flyingBubbleIndex = nil
+        }
+    }
+
+    /// Copy out of `tmp` so the file survives overlay teardown and system temp cleanup.
+    private func persistSentVideo(from tempURL: URL) -> URL? {
+        let fm = FileManager.default
+        guard let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let dir = support.appendingPathComponent("SentBoomerangs", isDirectory: true)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let dest = dir.appendingPathComponent(UUID().uuidString).appendingPathExtension("mov")
+            if fm.fileExists(atPath: dest.path) {
+                try fm.removeItem(at: dest)
+            }
+            try fm.copyItem(at: tempURL, to: dest)
+            return dest
+        } catch {
+            print("[ChatView] persistSentVideo failed: \(error.localizedDescription)")
+            return nil
         }
     }
 

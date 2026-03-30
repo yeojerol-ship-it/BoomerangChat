@@ -218,7 +218,10 @@ struct BoomerangOverlayView: View {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
             camera.stopSession()
-            then()
+            // Let SwiftUI detach the preview layer before the view tree is torn down.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                then()
+            }
         }
     }
 
@@ -265,10 +268,12 @@ struct BoomerangOverlayView: View {
             }
         }
 
-        // 4. Dismiss overlay after fly-in completes
+        // 4. Stop capture (clears preview), then dismiss so Fig isn’t torn down mid-flight.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             camera.stopSession()
-            isPresented = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                isPresented = false
+            }
         }
     }
 
