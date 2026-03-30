@@ -14,6 +14,8 @@ struct CameraPreviewView: UIViewRepresentable {
     func updateUIView(_ uiView: PreviewUIView, context: Context) {
         if let layer = previewLayer {
             uiView.setPreviewLayer(layer)
+        } else {
+            uiView.clearPreviewLayer()
         }
     }
 
@@ -21,11 +23,20 @@ struct CameraPreviewView: UIViewRepresentable {
         private var currentLayer: AVCaptureVideoPreviewLayer?
 
         func setPreviewLayer(_ layer: AVCaptureVideoPreviewLayer) {
+            guard layer !== currentLayer else {
+                layer.frame = bounds
+                return
+            }
             currentLayer?.removeFromSuperlayer()
             currentLayer = layer
             layer.frame = bounds
             layer.videoGravity = .resizeAspectFill
             self.layer.addSublayer(layer)
+        }
+
+        func clearPreviewLayer() {
+            currentLayer?.removeFromSuperlayer()
+            currentLayer = nil
         }
 
         override func layoutSubviews() {

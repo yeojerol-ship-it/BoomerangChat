@@ -235,18 +235,36 @@ struct ChatView: View {
             }
     }
 
-    /// Called by the overlay when user taps send.
-    /// 1. Adds the bubble (invisible) so the list scrolls up.
-    /// 2. After the scroll settles, the overlay starts the fly-in animation.
-    /// 3. When the fly-in completes, the bubble is revealed.
+    /// Called by the overlay when user taps send: add bubble hidden, then reveal after overlay fade-out.
     private func beginSendAnimation(url: URL) {
         let newIndex = sentBoomerangs.count
         flyingBubbleIndex = newIndex
-        sentBoomerangs.append(url)
-        // The onChange handler scrolls to this bubble.
-        // After scroll + fly-in animation complete, reveal the bubble.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+        let playbackURL = persistSentVideo(from: url) ?? url
+        sentBoomerangs.append(playbackURL)
+        // Match BoomerangOverlayView dismiss: 100ms fade + brief stopSession delay.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             flyingBubbleIndex = nil
+        }
+    }
+
+    /// Copy out of `tmp` so the file survives overlay teardown and system temp cleanup.
+    private func persistSentVideo(from tempURL: URL) -> URL? {
+        let fm = FileManager.default
+        guard let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let dir = support.appendingPathComponent("SentBoomerangs", isDirectory: true)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let dest = dir.appendingPathComponent(UUID().uuidString).appendingPathExtension("mov")
+            if fm.fileExists(atPath: dest.path) {
+                try fm.removeItem(at: dest)
+            }
+            try fm.copyItem(at: tempURL, to: dest)
+            return dest
+        } catch {
+            print("[ChatView] persistSentVideo failed: \(error.localizedDescription)")
+            return nil
         }
     }
 
@@ -271,7 +289,7 @@ struct ChatView: View {
         var tx = Transaction()
         tx.disablesAnimations = true
         withTransaction(tx) { dragOffset = 0 }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         DispatchQueue.main.async {
             showBoomerang = true
             isOpeningRecording = false
