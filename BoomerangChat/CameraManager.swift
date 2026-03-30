@@ -58,6 +58,8 @@ class CameraManager: NSObject, ObservableObject {
 
     func startRecording() {
         guard !isRecording else { return }
+        // No camera available (e.g. Simulator) — skip recording
+        guard session.isRunning, !movieOutput.connections.isEmpty else { return }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("mov")
@@ -76,10 +78,12 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     func stopRecording() {
-        guard isRecording else { return }
         timer?.invalidate()
         timer = nil
-        movieOutput.stopRecording()
+        guard isRecording else { return }
+        if movieOutput.isRecording {
+            movieOutput.stopRecording()
+        }
         isRecording = false
     }
 

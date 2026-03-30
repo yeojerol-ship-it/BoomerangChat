@@ -1,8 +1,21 @@
 import SwiftUI
 
+private struct BubbleFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
+}
+
 struct ChatView: View {
     @State private var sentBoomerangs: [URL] = []
     @State private var showBoomerang = false
+    /// Target frame for the send animation (screen coordinates).
+    @State private var sendTargetFrame: CGRect = .zero
+    /// Index of the bubble currently being animated in (hidden until fly-in completes).
+    @State private var flyingBubbleIndex: Int? = nil
+
 
     @State private var dragOffset: CGFloat = 0
     /// True after 100ms long-press succeeds; drag + fades only then.
@@ -15,8 +28,11 @@ struct ChatView: View {
     private let longPressDuration: Double = 0.1
     private let triggerThreshold: CGFloat = 100
     private let chatTopHeight: CGFloat = 104
-    private let threadHeight: CGFloat = 549
     private let inputBarHeight: CGFloat = 132.5
+    /// Space between the bottom of the chat-mid thread region and the input / action bar.
+    private let threadToInputGap: CGFloat = 24
+    /// Inset of messages from the left/right edges of the chat-mid thread list.
+    private let threadMessageInset: CGFloat = 16
     private let cameraEntranceBottomPadding: CGFloat = 50
     private let cameraProgressRingSize: CGFloat = 72
     private let cameraProgressLineWidth: CGFloat = 4
@@ -36,8 +52,15 @@ struct ChatView: View {
         return min(Double(dragOffset / triggerThreshold), 1) * 0.88
     }
 
+    /// Bubble size for sent boomerangs.
+    private let bubbleSize: CGFloat = 200
+
     var body: some View {
         GeometryReader { geo in
+            let threadAreaHeight = max(
+                0,
+                geo.size.height - chatTopHeight - inputBarHeight - threadToInputGap
+            )
             ZStack {
                 ZStack(alignment: .bottom) {
                     // Thread column sits below the header slot; chat_top is overlaid on top so
@@ -47,22 +70,59 @@ struct ChatView: View {
                             Color.clear
                                 .frame(width: geo.size.width, height: chatTopHeight)
 
-                            ZStack(alignment: .bottomTrailing) {
-                                Image("chat_mid")
-                                    .resizable()
-                                    .frame(width: geo.size.width, height: threadHeight)
+                            // Thread list: chat_mid (existing messages) + sent boomerangs appended below.
+                            ScrollViewReader { proxy in
+                                ScrollView(.vertical, showsIndicators: false) {
+                                    VStack(spacing: 0) {
+                                        // Existing chat messages (static image)
+                                        Image("chat_mid")
+                                            .resizable()
+                                            .scaledToFit()
+                                            .frame(width: geo.size.width)
 
-                                if !sentBoomerangs.isEmpty && !showBoomerang {
-                                    VStack(alignment: .trailing, spacing: 8) {
-                                        ForEach(sentBoomerangs.indices, id: \.self) { i in
-                                            SentBoomerangBubble(url: sentBoomerangs[i])
+                                        // Sent boomerang videos appended as new messages
+                                        if !sentBoomerangs.isEmpty {
+                                            VStack(alignment: .trailing, spacing: 8) {
+                                                ForEach(sentBoomerangs.indices, id: \.self) { i in
+                                                    SentBoomerangBubble(url: sentBoomerangs[i])
+                                                        .id(i)
+                                                        // Hide bubble while the orb is flying to its position
+                                                        .opacity(flyingBubbleIndex == i ? 0 : 1)
+                                                        // Report the flying bubble's actual screen position
+                                                        .overlay {
+                                                            if flyingBubbleIndex == i {
+                                                                GeometryReader { bubbleGeo in
+                                                                    Color.clear
+                                                                        .preference(
+                                                                            key: BubbleFrameKey.self,
+                                                                            value: bubbleGeo.frame(in: .global)
+                                                                        )
+                                                                }
+                                                            }
+                                                        }
+                                                }
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .trailing)
+                                            .padding(.horizontal, threadMessageInset)
+                                            .padding(.top, threadMessageInset)
+                                            .padding(.bottom, threadMessageInset)
                                         }
                                     }
-                                    .padding(.trailing, 16)
-                                    .padding(.bottom, 16)
+                                }
+                                .onChange(of: sentBoomerangs.count) { _, newCount in
+                                    guard newCount > 0 else { return }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                        withAnimation(.easeOut(duration: 0.35)) {
+                                            proxy.scrollTo(newCount - 1, anchor: .bottom)
+                                        }
+                                    }
                                 }
                             }
-                            .frame(width: geo.size.width, height: threadHeight, alignment: .top)
+                            .frame(width: geo.size.width, height: threadAreaHeight)
+                            .clipped()
+                            .onPreferenceChange(BubbleFrameKey.self) { frame in
+                                if frame != .zero { sendTargetFrame = frame }
+                            }
                             .contentShape(Rectangle())
                             .gesture(threadPullGesture, isEnabled: !showBoomerang)
                             .offset(y: -dragOffset)
@@ -108,7 +168,8 @@ struct ChatView: View {
                 if showBoomerang {
                     BoomerangOverlayView(
                         isPresented: $showBoomerang,
-                        onSend: { url in sentBoomerangs.append(url) }
+                        onSend: { url in beginSendAnimation(url: url) },
+                        sendTargetFrame: sendTargetFrame
                     )
                     .frame(width: geo.size.width, height: geo.size.height)
                     .zIndex(2000)
@@ -174,6 +235,21 @@ struct ChatView: View {
             }
     }
 
+    /// Called by the overlay when user taps send.
+    /// 1. Adds the bubble (invisible) so the list scrolls up.
+    /// 2. After the scroll settles, the overlay starts the fly-in animation.
+    /// 3. When the fly-in completes, the bubble is revealed.
+    private func beginSendAnimation(url: URL) {
+        let newIndex = sentBoomerangs.count
+        flyingBubbleIndex = newIndex
+        sentBoomerangs.append(url)
+        // The onChange handler scrolls to this bubble.
+        // After scroll + fly-in animation complete, reveal the bubble.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            flyingBubbleIndex = nil
+        }
+    }
+
     private func resetPullState(animated: Bool) {
         pullUnlocked = false
         didFireScrollUpHaptic = false
@@ -214,7 +290,7 @@ struct ChatView: View {
                 Text("Say cheese!")
                     .font(.system(size: 12))
                     .foregroundColor(Color.black.opacity(0.48))
-                    .offset(y: -56)
+                    .offset(y: 56)
                     .opacity(Double(pullOpacity))
 
                 emojiView("🤩", size: 20, rotation: 13.78,

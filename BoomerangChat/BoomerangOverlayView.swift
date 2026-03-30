@@ -21,12 +21,17 @@ struct BoomerangOverlayView: View {
     @StateObject private var camera = CameraManager()
     @Binding var isPresented: Bool
     var onSend: (URL) -> Void
+    /// Target frame (in screen coordinates) for the send animation destination.
+    var sendTargetFrame: CGRect = .zero
 
     @State private var phase: Phase = .recording
     @State private var blurOpacity: Double = 0
     @State private var cameraLift: CGFloat = 0
     @State private var cameraPop: CGFloat = 0
     @State private var chromeOpacity: CGFloat = 0
+    @State private var buttonPop: CGFloat = 0
+    /// 0→1 drives the send fly-out animation (position + scale).
+    @State private var sendProgress: CGFloat = 0
 
     enum Phase { case recording, postRecording }
 
@@ -38,14 +43,29 @@ struct BoomerangOverlayView: View {
             let currentCenterY = recordingCameraStartY + (finalCenterY - recordingCameraStartY) * cameraLift
             let fullDiameter = circleD * layoutScale
 
+            // Send animation: interpolate from recording orb to chat bubble target
+            let targetCenterX = sendTargetFrame.midX
+            let targetCenterY = sendTargetFrame.midY
+            let targetScale = sendTargetFrame.isEmpty ? 0.001 : sendTargetFrame.width / fullDiameter
+            let orbCenterX = geo.size.width / 2 + (targetCenterX - geo.size.width / 2) * sendProgress
+            let orbCenterY = currentCenterY + (targetCenterY - currentCenterY) * sendProgress
+            let orbScale = 1 + (targetScale - 1) * sendProgress
+
             ZStack {
+                // ── Dismiss layer: covers entire screen ──────────────
+                Color.clear
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { dismissWithoutSending() }
+
+                // ── Blur background (non-interactive) ────────────────
                 Rectangle()
                     .fill(.ultraThinMaterial)
                     .ignoresSafeArea()
                     .opacity(blurOpacity)
-                    .onTapGesture { dismissWithoutSending() }
+                    .allowsHitTesting(false)
 
-                // Fixed final size + scale from center (Telegram-style); animating frame grows from top-left.
+                // ── Camera orb ───────────────────────────────────────
                 ZStack {
                     Circle().fill(ringBg)
                         .overlay(Circle().stroke(ringBorder, lineWidth: 1))
@@ -57,11 +77,15 @@ struct BoomerangOverlayView: View {
                 }
                 .frame(width: fullDiameter, height: fullDiameter)
                 .clipShape(Circle())
-                .scaleEffect(max(0.001, cameraPop), anchor: .center)
+                .scaleEffect(max(0.001, cameraPop * (sendProgress > 0 ? orbScale : 1)), anchor: .center)
                 .contentShape(Circle())
                 .onTapGesture { /* absorb taps on circle */ }
-                .position(x: geo.size.width / 2, y: currentCenterY)
+                .position(
+                    x: sendProgress > 0 ? orbCenterX : geo.size.width / 2,
+                    y: sendProgress > 0 ? orbCenterY : currentCenterY
+                )
 
+                // ── Timer ────────────────────────────────────────────
                 HStack(spacing: 6) {
                     Circle().fill(Color.red).frame(width: 8, height: 8)
                     Text(timeString(camera.recordingTime))
@@ -74,7 +98,10 @@ struct BoomerangOverlayView: View {
                 .opacity(chromeOpacity)
                 .allowsHitTesting(false)
 
+                // ── Action buttons (fixed size hit area) ─────────────
                 actionButtons(scale: layoutScale)
+                    .fixedSize()
+                    .scaleEffect(buttonPop)
                     .opacity(chromeOpacity)
                     .position(
                         x: geo.size.width / 2,
@@ -91,17 +118,32 @@ struct BoomerangOverlayView: View {
         cameraLift = 0
         cameraPop = 0
         chromeOpacity = 0
+        buttonPop = 0
+        sendProgress = 0
 
-        withAnimation(.easeOut(duration: 0.22)) {
+        withAnimation(.easeOut(duration: 0.25)) {
             blurOpacity = 1
         }
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) {
+        // Camera orb lifts into position with a bouncy spring
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.55, blendDuration: 0)) {
             cameraLift = 1
-            cameraPop = 1
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.easeOut(duration: 0.18)) {
+        // Scale pop follows slightly behind the lift for a staggered feel
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.5, blendDuration: 0)) {
+                cameraPop = 1
+            }
+        }
+        // Chrome fades in as the orb settles
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.easeOut(duration: 0.2)) {
                 chromeOpacity = 1
+            }
+        }
+        // Stop button bounces in after camera orb
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.5)) {
+                buttonPop = 1
             }
         }
         Task { @MainActor in
@@ -168,6 +210,7 @@ struct BoomerangOverlayView: View {
         withAnimation(.easeIn(duration: 0.22)) {
             blurOpacity = 0
             chromeOpacity = 0
+            buttonPop = 0
         }
         withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
             cameraLift = 0
@@ -181,20 +224,52 @@ struct BoomerangOverlayView: View {
 
     private func stopAndReview() {
         camera.stopRecording()
+        buttonPop = 0
         phase = .postRecording
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
+            buttonPop = 1
+        }
     }
 
     private func retake() {
         camera.recordedVideoURL = nil
         camera.recordingTime    = 0
         phase = .recording
+        buttonPop = 0
         withAnimation(.easeOut(duration: 0.2)) { chromeOpacity = 1 }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
+            buttonPop = 1
+        }
         camera.startRecording()
     }
 
     private func sendToChat() {
         guard let url = camera.recordedVideoURL else { return }
-        animateOut { isPresented = false; onSend(url) }
+
+        // 1. Fade out chrome and buttons immediately
+        withAnimation(.easeIn(duration: 0.2)) {
+            chromeOpacity = 0
+            buttonPop = 0
+        }
+
+        // 2. Add bubble to chat (invisible) — this triggers the chat list to scroll up
+        onSend(url)
+
+        // 3. After a short delay for the scroll to settle, animate orb to target + fade blur
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            withAnimation(.easeOut(duration: 0.25)) {
+                blurOpacity = 0
+            }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+                sendProgress = 1
+            }
+        }
+
+        // 4. Dismiss overlay after fly-in completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
+            camera.stopSession()
+            isPresented = false
+        }
     }
 
     private func downloadVideo() {
