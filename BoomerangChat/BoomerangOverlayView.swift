@@ -256,17 +256,17 @@ struct BoomerangOverlayView: View {
         onSend(url)
 
         // 3. After a short delay for the scroll to settle, animate orb to target + fade blur
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            withAnimation(.easeOut(duration: 0.25)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.easeOut(duration: 0.2)) {
                 blurOpacity = 0
             }
-            withAnimation(.spring(response: 0.45, dampingFraction: 0.78)) {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.78)) {
                 sendProgress = 1
             }
         }
 
         // 4. Dismiss overlay after fly-in completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             camera.stopSession()
             isPresented = false
         }

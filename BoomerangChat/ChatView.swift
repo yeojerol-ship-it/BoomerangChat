@@ -111,8 +111,8 @@ struct ChatView: View {
                                 }
                                 .onChange(of: sentBoomerangs.count) { _, newCount in
                                     guard newCount > 0 else { return }
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                        withAnimation(.easeOut(duration: 0.35)) {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                                        withAnimation(.easeOut(duration: 0.15)) {
                                             proxy.scrollTo(newCount - 1, anchor: .bottom)
                                         }
                                     }
@@ -245,7 +245,7 @@ struct ChatView: View {
         sentBoomerangs.append(url)
         // The onChange handler scrolls to this bubble.
         // After scroll + fly-in animation complete, reveal the bubble.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             flyingBubbleIndex = nil
         }
     }
