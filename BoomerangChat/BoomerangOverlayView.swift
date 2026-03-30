@@ -10,6 +10,10 @@ private let neutralBtn  = Color.black.opacity(0.05)
 private let frameH: CGFloat   = 844
 private let circleY: CGFloat  = 173   // top of 352×352 camera circle
 private let circleD: CGFloat  = 352
+/// Recording progress ring (logical pt, scaled with layout).
+private let recordingProgressRingD: CGFloat = 340
+private let recordingProgressLineWidth: CGFloat = 6
+private let recordingProgressColor = Color.white.opacity(0.4)  // #FFFFFF @ 40%
 private let timerY: CGFloat   = circleY + circleD + 16   // 541
 private let buttonY: CGFloat  = 684   // top of stop / action row
 
@@ -74,6 +78,23 @@ struct BoomerangOverlayView: View {
                         .clipShape(Circle())
 
                     Circle().stroke(Color.white.opacity(0.15), lineWidth: 5)
+
+                    if phase == .recording, camera.isRecording {
+                        let ringD = recordingProgressRingD * layoutScale
+                        let lineW = recordingProgressLineWidth * layoutScale
+                        let progress = min(
+                            1,
+                            camera.recordingTime / CameraManager.maxRecordingDuration
+                        )
+                        Circle()
+                            .trim(from: 0, to: progress)
+                            .stroke(
+                                recordingProgressColor,
+                                style: StrokeStyle(lineWidth: lineW, lineCap: .round)
+                            )
+                            .frame(width: ringD, height: ringD)
+                            .rotationEffect(.degrees(-90))
+                    }
                 }
                 .frame(width: fullDiameter, height: fullDiameter)
                 .clipShape(Circle())

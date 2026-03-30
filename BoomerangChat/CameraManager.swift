@@ -5,6 +5,9 @@ import SwiftUI
 /// Camera capture: all `AVCaptureSession` work runs on `sessionQueue` to satisfy AVFoundation threading rules.
 @MainActor
 class CameraManager: NSObject, ObservableObject {
+    /// Clip length cap (seconds); overlay progress ring uses the same value.
+    static let maxRecordingDuration: TimeInterval = 15
+
     @Published var isRecording = false
     @Published var recordingTime: TimeInterval = 0
     @Published var recordedVideoURL: URL?
@@ -13,7 +16,6 @@ class CameraManager: NSObject, ObservableObject {
     private let session = AVCaptureSession()
     private var movieOutput = AVCaptureMovieFileOutput()
     private var timer: Timer?
-    private let maxDuration: TimeInterval = 15
     private let sessionQueue = DispatchQueue(label: "com.boomerang.camera.session")
 
     override init() {
@@ -110,7 +112,7 @@ class CameraManager: NSObject, ObservableObject {
                     guard let self else { return }
                     Task { @MainActor in
                         self.recordingTime += 0.1
-                        if self.recordingTime >= self.maxDuration {
+                        if self.recordingTime >= Self.maxRecordingDuration {
                             self.stopRecording()
                         }
                     }
