@@ -2,7 +2,8 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
-/// Looping, muted video that fills its container (`AVPlayerLooper` + tuned for local short clips).
+/// Looping, muted video that fills its container.
+/// Uses a plain AVPlayer with manual seek-to-start on end for reliable looping.
 struct LoopingVideoView: UIViewRepresentable {
     let url: URL
 
@@ -22,11 +23,12 @@ struct LoopingVideoView: UIViewRepresentable {
 
     final class LoopingPlayerUIView: UIView {
         private var playerLayer: AVPlayerLayer?
-        private var queuePlayer: AVQueuePlayer?
-        private var looper: AVPlayerLooper?
+        private var player: AVPlayer?
         private var loadedPath: String?
+        private var endObserver: NSObjectProtocol?
+        private var stallObserver: NSObjectProtocol?
         private var statusObservation: NSKeyValueObservation?
-        private var loadGeneration: UInt64 = 0
+        private var timeControlObservation: NSKeyValueObservation?
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -45,81 +47,101 @@ struct LoopingVideoView: UIViewRepresentable {
                 return
             }
 
-            guard FileManager.default.fileExists(atPath: path) else {
-                return
-            }
+            guard FileManager.default.fileExists(atPath: path) else { return }
 
             cleanup()
-            loadGeneration += 1
-            let generation = loadGeneration
             let fileURL = url.standardizedFileURL
 
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let template = AVPlayerItem(url: fileURL)
-                template.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-                template.preferredForwardBufferDuration = 1.0
-                if #available(iOS 15.0, *) {
-                    // Bubble is small; decode at modest resolution for smoother playback.
-                    template.preferredMaximumResolution = CGSize(width: 720, height: 720)
-                }
+            let asset = AVURLAsset(url: fileURL, options: [
+                AVURLAssetPreferPreciseDurationAndTimingKey: true
+            ])
+            let item = AVPlayerItem(asset: asset)
+            item.preferredForwardBufferDuration = 2.0
 
-                let player = AVQueuePlayer()
-                player.isMuted = true
-                player.automaticallyWaitsToMinimizeStalling = false
+            let newPlayer = AVPlayer(playerItem: item)
+            newPlayer.isMuted = true
+            newPlayer.automaticallyWaitsToMinimizeStalling = false
 
-                let playerLooper = AVPlayerLooper(player: player, templateItem: template)
+            let layer = AVPlayerLayer(player: newPlayer)
+            layer.videoGravity = .resizeAspectFill
+            layer.frame = bounds
+            self.layer.addSublayer(layer)
 
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else {
-                        player.pause()
-                        return
-                    }
-                    guard generation == self.loadGeneration else {
-                        player.pause()
-                        return
-                    }
+            self.playerLayer = layer
+            self.player = newPlayer
+            self.loadedPath = path
 
-                    let layer = AVPlayerLayer(player: player)
-                    layer.videoGravity = .resizeAspectFill
-                    layer.frame = self.bounds
-                    self.layer.addSublayer(layer)
-
-                    self.playerLayer = layer
-                    self.queuePlayer = player
-                    self.looper = playerLooper
-                    self.loadedPath = path
-
-                    self.statusObservation = template.observe(\.status, options: [.new]) { [weak self, weak player] item, _ in
-                        guard item.status == .readyToPlay else { return }
-                        player?.play()
-                        self?.clearStatusObservation()
-                    }
-
-                    if template.status == .readyToPlay {
+            // Loop: when playback ends, seek to start and play again
+            endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self, let player = self.player else { return }
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    if finished {
                         player.play()
                     }
                 }
             }
-        }
 
-        private func clearStatusObservation() {
-            statusObservation?.invalidate()
-            statusObservation = nil
+            // Recovery: if playback stalls, try to resume
+            stallObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemPlaybackStalled,
+                object: item,
+                queue: .main
+            ) { [weak self] _ in
+                self?.player?.play()
+            }
+
+            // Watch timeControlStatus to detect pauses and auto-resume
+            timeControlObservation = newPlayer.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if player.timeControlStatus == .paused,
+                       let item = player.currentItem,
+                       item.status == .readyToPlay {
+                        // If paused but ready, resume — handles edge-case stalls
+                        player.play()
+                    }
+                }
+            }
+
+            // Start playback once ready
+            statusObservation = item.observe(\.status, options: [.new]) { [weak newPlayer] item, _ in
+                if item.status == .readyToPlay {
+                    newPlayer?.play()
+                }
+            }
+
+            // In case it's immediately ready
+            if item.status == .readyToPlay {
+                newPlayer.play()
+            }
         }
 
         func ensurePlaying() {
-            guard let player = queuePlayer else { return }
-            player.isMuted = true
-            if player.rate == 0 {
+            guard let player else { return }
+            if player.rate == 0, player.currentItem?.status == .readyToPlay {
                 player.play()
             }
         }
 
         func cleanup() {
-            clearStatusObservation()
-            looper = nil
-            queuePlayer?.pause()
-            queuePlayer = nil
+            if let endObserver {
+                NotificationCenter.default.removeObserver(endObserver)
+            }
+            endObserver = nil
+            if let stallObserver {
+                NotificationCenter.default.removeObserver(stallObserver)
+            }
+            stallObserver = nil
+            statusObservation?.invalidate()
+            statusObservation = nil
+            timeControlObservation?.invalidate()
+            timeControlObservation = nil
+            player?.pause()
+            player = nil
             playerLayer?.removeFromSuperlayer()
             playerLayer = nil
             loadedPath = nil
@@ -134,7 +156,15 @@ struct LoopingVideoView: UIViewRepresentable {
         }
 
         deinit {
-            cleanup()
+            if let endObserver {
+                NotificationCenter.default.removeObserver(endObserver)
+            }
+            if let stallObserver {
+                NotificationCenter.default.removeObserver(stallObserver)
+            }
+            statusObservation?.invalidate()
+            timeControlObservation?.invalidate()
+            player?.pause()
         }
     }
 }

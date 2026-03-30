@@ -34,10 +34,14 @@ struct BoomerangOverlayView: View {
     @State private var cameraPop: CGFloat = 0
     @State private var chromeOpacity: CGFloat = 0
     @State private var buttonPop: CGFloat = 0
-    /// 0→1 drives the send fly-out animation (position + scale).
+    /// 0→1 drives the send fly-out animation (position + scale). Unused during dismiss (instant fade).
     @State private var sendProgress: CGFloat = 0
+    /// Whole overlay fades out on dismiss (no camera scale / Y exit).
+    @State private var overlayContentOpacity: Double = 1
 
     enum Phase { case recording, postRecording }
+
+    private let dismissFadeDuration: Double = 0.1
 
     var body: some View {
         GeometryReader { geo in
@@ -120,15 +124,16 @@ struct BoomerangOverlayView: View {
                 .allowsHitTesting(false)
 
                 // ── Action buttons (fixed size hit area) ─────────────
-                actionButtons(scale: layoutScale)
+                actionButtons(scale: layoutScale, buttonPop: buttonPop)
                     .fixedSize()
-                    .scaleEffect(buttonPop)
                     .opacity(chromeOpacity)
                     .position(
                         x: geo.size.width / 2,
                         y: (buttonY + 45) * layoutScale + safeTop * (1 - layoutScale)
                     )
             }
+            .opacity(overlayContentOpacity)
+            .allowsHitTesting(overlayContentOpacity > 0.5)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { runEnterTransition() }
@@ -141,6 +146,7 @@ struct BoomerangOverlayView: View {
         chromeOpacity = 0
         buttonPop = 0
         sendProgress = 0
+        overlayContentOpacity = 1
 
         withAnimation(.easeOut(duration: 0.25)) {
             blurOpacity = 1
@@ -180,7 +186,7 @@ struct BoomerangOverlayView: View {
 
     // MARK: - Action buttons
     @ViewBuilder
-    private func actionButtons(scale: CGFloat) -> some View {
+    private func actionButtons(scale: CGFloat, buttonPop: CGFloat) -> some View {
         switch phase {
         case .recording:
             Button { stopAndReview() } label: {
@@ -191,34 +197,45 @@ struct BoomerangOverlayView: View {
                         .frame(width: 32 * scale, height: 32 * scale)
                 }
             }
+            .scaleEffect(buttonPop, anchor: .center)
 
         case .postRecording:
             HStack(spacing: 40 * scale) {
-                squareButton(icon: "arrow.clockwise", scale: scale) { retake() }
+                postRecordingSquareButton(asset: "recording_retake", scale: scale, action: retake)
+                    .scaleEffect(buttonPop, anchor: .center)
 
                 Button { sendToChat() } label: {
                     ZStack {
                         Circle().fill(brandBlue).frame(width: 90 * scale, height: 90 * scale)
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 24 * scale, weight: .bold))
+                        Image("recording_send")
+                            .renderingMode(.template)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .frame(width: 32 * scale, height: 32 * scale)
                             .foregroundColor(.white)
                     }
                 }
+                .scaleEffect(buttonPop, anchor: .center)
 
-                squareButton(icon: "arrow.down.to.line", scale: scale) { downloadVideo() }
+                postRecordingSquareButton(asset: "recording_download", scale: scale, action: downloadVideo)
+                    .scaleEffect(buttonPop, anchor: .center)
             }
         }
     }
 
-    private func squareButton(icon: String, scale: CGFloat, action: @escaping () -> Void) -> some View {
+    /// Post-review retake / download — uses design PNGs (original colors).
+    private func postRecordingSquareButton(asset: String, scale: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             ZStack {
                 RoundedRectangle(cornerRadius: 20 * scale)
                     .fill(neutralBtn)
                     .frame(width: 68 * scale, height: 68 * scale)
-                Image(systemName: icon)
-                    .font(.system(size: 24 * scale))
-                    .foregroundColor(.primary)
+                Image(asset)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 24 * scale, height: 24 * scale)
             }
         }
     }
@@ -227,21 +244,21 @@ struct BoomerangOverlayView: View {
         let s = Int(t); return String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    private func animateOut(then: @escaping () -> Void) {
-        withAnimation(.easeIn(duration: 0.22)) {
-            blurOpacity = 0
-            chromeOpacity = 0
-            buttonPop = 0
+    /// Fades the full overlay in `dismissFadeDuration`, then stops capture and dismisses (no orb motion).
+    private func dismissWithFade() {
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            sendProgress = 0
         }
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-            cameraLift = 0
-            cameraPop = 0
+        withAnimation(.linear(duration: dismissFadeDuration)) {
+            overlayContentOpacity = 0
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + dismissFadeDuration) {
             camera.stopSession()
-            // Let SwiftUI detach the preview layer before the view tree is torn down.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                then()
+                isPresented = false
+                overlayContentOpacity = 1
             }
         }
     }
@@ -269,33 +286,8 @@ struct BoomerangOverlayView: View {
 
     private func sendToChat() {
         guard let url = camera.recordedVideoURL else { return }
-
-        // 1. Fade out chrome and buttons immediately
-        withAnimation(.easeIn(duration: 0.2)) {
-            chromeOpacity = 0
-            buttonPop = 0
-        }
-
-        // 2. Add bubble to chat (invisible) — this triggers the chat list to scroll up
         onSend(url)
-
-        // 3. After a short delay for the scroll to settle, animate orb to target + fade blur
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            withAnimation(.easeOut(duration: 0.2)) {
-                blurOpacity = 0
-            }
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.78)) {
-                sendProgress = 1
-            }
-        }
-
-        // 4. Stop capture (clears preview), then dismiss so Fig isn’t torn down mid-flight.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            camera.stopSession()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                isPresented = false
-            }
-        }
+        dismissWithFade()
     }
 
     private func downloadVideo() {
@@ -304,6 +296,6 @@ struct BoomerangOverlayView: View {
 
     private func dismissWithoutSending() {
         camera.stopRecording()
-        animateOut { isPresented = false }
+        dismissWithFade()
     }
 }
