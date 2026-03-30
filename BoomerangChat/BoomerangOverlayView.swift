@@ -12,7 +12,6 @@ private let circleY: CGFloat  = 173   // top of 352×352 camera circle
 private let circleD: CGFloat  = 352
 private let timerY: CGFloat   = circleY + circleD + 16   // 541
 private let buttonY: CGFloat  = 684   // top of stop / action row
-private let cheeseY: CGFloat  = 750.68
 
 /// Starting center Y for the camera orb before it animates into layout (logical pt).
 private let recordingCameraStartY: CGFloat = 670
@@ -81,19 +80,6 @@ struct BoomerangOverlayView: View {
                         x: geo.size.width / 2,
                         y: (buttonY + 45) * layoutScale + safeTop * (1 - layoutScale)
                     )
-
-                emojiLayer(geo: geo, scale: layoutScale)
-                    .opacity(chromeOpacity)
-
-                Text("Say cheese!")
-                    .font(.system(size: 12))
-                    .foregroundColor(Color.black.opacity(0.48))
-                    .position(
-                        x: geo.size.width / 2,
-                        y: cheeseY * layoutScale + safeTop * (1 - layoutScale)
-                    )
-                    .opacity(chromeOpacity)
-                    .allowsHitTesting(false)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -172,26 +158,6 @@ struct BoomerangOverlayView: View {
                     .foregroundColor(.primary)
             }
         }
-    }
-
-    private func emojiLayer(geo: GeometryProxy, scale: CGFloat) -> some View {
-        let safeTop = geo.safeAreaInsets.top
-        let adj = safeTop * (1 - scale)
-
-        return ZStack {
-            Text("😍").font(.system(size: 24 * scale))
-                .rotationEffect(.degrees(-18.27))
-                .position(x: 152 * scale, y: 641 * scale + adj)
-
-            Text("🤩").font(.system(size: 20 * scale))
-                .rotationEffect(.degrees(13.78))
-                .position(x: 244 * scale, y: 655 * scale + adj)
-
-            Text("🤪").font(.system(size: 16 * scale))
-                .rotationEffect(.degrees(-13.32))
-                .position(x: 142 * scale, y: 721 * scale + adj)
-        }
-        .allowsHitTesting(false)
     }
 
     private func timeString(_ t: TimeInterval) -> String {

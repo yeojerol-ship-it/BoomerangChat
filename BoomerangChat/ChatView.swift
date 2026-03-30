@@ -18,8 +18,9 @@ struct ChatView: View {
     private let threadHeight: CGFloat = 549
     private let inputBarHeight: CGFloat = 132.5
     private let cameraEntranceBottomPadding: CGFloat = 50
-    private let cameraProgressRingSize: CGFloat = 74
-    private let cameraProgressLineWidth: CGFloat = 2
+    private let cameraProgressRingSize: CGFloat = 72
+    private let cameraProgressLineWidth: CGFloat = 4
+    private let cameraPullIconSize: CGFloat = 24
     private let brandBlue = Color(red: 66/255, green: 87/255, blue: 255/255)  // #4257FF
     private let snapBackSpring = Animation.spring(response: 0.38, dampingFraction: 0.82)
 
@@ -208,6 +209,23 @@ struct ChatView: View {
         let pullOpacity = min(progress * 1.5, 1)
 
         return ZStack {
+            // Behind the ring + button so copy and emojis never sit on top of the pull orb.
+            ZStack {
+                Text("Say cheese!")
+                    .font(.system(size: 12))
+                    .foregroundColor(Color.black.opacity(0.48))
+                    .offset(y: -56)
+                    .opacity(Double(pullOpacity))
+
+                emojiView("🤩", size: 20, rotation: 13.78,
+                          dx: 50, dy: -30, progress: progress)
+                emojiView("😍", size: 24, rotation: -18.27,
+                          dx: -40, dy: -44, progress: progress)
+                emojiView("🤪", size: 16, rotation: -13.32,
+                          dx: -50, dy: 30, progress: progress)
+            }
+            .allowsHitTesting(false)
+
             ZStack {
                 Circle()
                     .trim(from: 0, to: progress)
@@ -219,23 +237,19 @@ struct ChatView: View {
                     .rotationEffect(.degrees(-90))
 
                 Circle()
-                    .fill(brandBlue)
+                    .fill(brandBlue.opacity(0.18))
                     .frame(width: 60, height: 60)
                     .overlay {
-                        Image(systemName: "camera.fill")
-                            .font(.system(size: 22))
-                            .foregroundColor(.white)
+                        Image("camera_pull")
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .frame(width: cameraPullIconSize, height: cameraPullIconSize)
                     }
             }
             .scaleEffect(pullScale)
             .opacity(pullOpacity)
-
-            emojiView("🤩", size: 20, rotation: 13.78,
-                      dx: 50, dy: -30, progress: progress)
-            emojiView("😍", size: 24, rotation: -18.27,
-                      dx: -40, dy: -44, progress: progress)
-            emojiView("🤪", size: 16, rotation: -13.32,
-                      dx: -50, dy: 30, progress: progress)
+            .allowsHitTesting(false)
         }
         .padding(.bottom, cameraEntranceBottomPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
